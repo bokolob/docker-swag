@@ -1,6 +1,8 @@
 #!/usr/bin/with-contenv bash
 # shellcheck shell=bash
 
+mkdir -p /var/www/html
+
 if [[ -f "/config/cabundle.pem" ]]; then
 	export REQUESTS_CA_BUNDLE="/config/cabundle.pem"
 fi
