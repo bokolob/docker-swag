@@ -2,8 +2,7 @@
 # shellcheck shell=bash
 
 # permissions
+find /config/log ! -path '/config/log/logrotate.status' -exec chmod +r {} \+
+
 lsiown -R abc:abc \
     /config
-chmod -R 0644 /etc/logrotate.d
-chmod -R +r /config/log
-chmod +x /app/le-renew.sh
