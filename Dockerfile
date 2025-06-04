@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM ghcr.io/linuxserver/baseimage-alpine-nginx:3.19
+FROM ghcr.io/linuxserver/baseimage-alpine-nginx:3.21
 
 # set version label
 ARG BUILD_DATE
@@ -10,8 +10,10 @@ LABEL build_version="Linuxserver.io version:- ${VERSION} Build-date:- ${BUILD_DA
 LABEL maintainer="nemchik"
 
 # environment settings
-ENV DHLEVEL=2048 ONLY_SUBDOMAINS=false AWS_CONFIG_FILE=/config/dns-conf/route53.ini
-ENV S6_BEHAVIOUR_IF_STAGE2_FAILS=2
+ENV DHLEVEL=2048 \
+  ONLY_SUBDOMAINS=false \
+  AWS_CONFIG_FILE=/config/dns-conf/route53.ini \
+  S6_BEHAVIOUR_IF_STAGE2_FAILS=2
 
 RUN \
   echo "**** install build packages ****" && \
@@ -27,6 +29,8 @@ RUN \
   apk add --no-cache \
     fail2ban \
     gnupg \
+    inotify-tools \
+    iptables-legacy \
     memcached \
     nginx-mod-http-brotli \
     nginx-mod-http-dav-ext \
@@ -64,6 +68,7 @@ RUN \
     php83-pdo_sqlite \
     php83-pear \
     php83-pecl-apcu \
+    php83-pecl-mcrypt \
     php83-pecl-memcached \
     php83-pecl-redis \
     php83-pgsql \
@@ -76,8 +81,6 @@ RUN \
     php83-xmlreader \
     php83-xsl \
     whois && \
-  apk add --no-cache --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community \
-    php83-pecl-mcrypt && \
   echo "**** install certbot plugins ****" && \
   if [ -z ${CERTBOT_VERSION+x} ]; then \
     CERTBOT_VERSION=$(curl -sL  https://pypi.python.org/pypi/certbot/json |jq -r '. | .info.version'); \
@@ -86,7 +89,7 @@ RUN \
   pip install -U --no-cache-dir \
     pip \
     wheel && \
-  pip install -U --no-cache-dir --find-links https://wheel-index.linuxserver.io/alpine-3.19/ \
+  pip install -U --no-cache-dir --find-links https://wheel-index.linuxserver.io/alpine-3.21/ \
     certbot==${CERTBOT_VERSION} \
     certbot-dns-acmedns \
     certbot-dns-aliyun \
@@ -110,7 +113,6 @@ RUN \
     certbot-dns-glesys \
     certbot-dns-godaddy \
     certbot-dns-google \
-    certbot-dns-google-domains \
     certbot-dns-he \
     certbot-dns-hetzner \
     certbot-dns-infomaniak \
@@ -149,9 +151,9 @@ RUN \
   rm -f /etc/nginx/conf.d/stream.conf && \
   echo "**** correct ip6tables legacy issue ****" && \
   rm \
-    /sbin/ip6tables && \
+    /usr/sbin/ip6tables && \
   ln -s \
-    /sbin/ip6tables-nft /sbin/ip6tables && \
+    /usr/sbin/ip6tables-nft /usr/sbin/ip6tables && \
   echo "**** remove unnecessary fail2ban filters ****" && \
   rm \
     /etc/fail2ban/jail.d/alpine-ssh.conf && \
@@ -170,6 +172,7 @@ RUN \
   tar xf \
     /tmp/proxy-confs.tar.gz -C \
     /defaults/nginx/proxy-confs --strip-components=1 --exclude=linux*/.editorconfig --exclude=linux*/.gitattributes --exclude=linux*/.github --exclude=linux*/.gitignore --exclude=linux*/LICENSE && \
+  printf "Linuxserver.io version: ${VERSION}\nBuild-date: ${BUILD_DATE}" > /build_version && \
   echo "**** cleanup ****" && \
   apk del --purge \
     build-dependencies && \

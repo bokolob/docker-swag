@@ -40,12 +40,6 @@ if [[ "${VALIDATION}" = "dns" ]] && ! echo "${CERTBOT_DNS_AUTHENTICATORS}" | gre
     sleep infinity
 fi
 
-# set owner of certbot's CONFIG_DIR, WORK_DIR, and LOGS_DIR to abc
-lsiown -R abc:abc \
-    /etc/letsencrypt \
-    /var/lib/letsencrypt \
-    /var/log/letsencrypt
-
 # set_ini_value logic:
 # - if the name is not found in the file, append the name=value to the end of the file
 # - if the name is found in the file, replace the value
@@ -64,12 +58,17 @@ touch /config/etc/letsencrypt/cli.ini
 lsiown abc:abc /config/etc/letsencrypt/cli.ini
 grep -qF 'agree-tos' /config/etc/letsencrypt/cli.ini || echo 'agree-tos=true' >>/config/etc/letsencrypt/cli.ini
 
+# Check for broken dns credentials value in cli.ini and remove
+sed -i '/dns--credentials/d' /config/etc/letsencrypt/cli.ini
+
+# Disable Certbot's built in log rotation
+set_ini_value "max-log-backups" "0" /config/etc/letsencrypt/cli.ini
+
 # copy dns default configs
 cp -n /defaults/dns-conf/* /config/dns-conf/ 2> >(grep -v 'cp: not replacing')
 lsiown -R abc:abc /config/dns-conf
 
 # copy default renewal hooks
-chmod -R +x /defaults/etc/letsencrypt/renewal-hooks
 cp -nR /defaults/etc/letsencrypt/renewal-hooks/* /config/etc/letsencrypt/renewal-hooks/ 2> >(grep -v 'cp: not replacing')
 lsiown -R abc:abc /config/etc/letsencrypt/renewal-hooks
 
@@ -171,14 +170,14 @@ fi
 rm -rf /config/keys/letsencrypt
 if [[ "${ONLY_SUBDOMAINS}" = "true" ]] && [[ ! "${SUBDOMAINS}" = "wildcard" ]]; then
     DOMAIN="$(echo "${SUBDOMAINS}" | tr ',' ' ' | awk '{print $1}').${URL}"
-    ln -s ../etc/letsencrypt/live/"${DOMAIN}" /config/keys/letsencrypt
+    ln -s /config/etc/letsencrypt/live/"${DOMAIN}" /config/keys/letsencrypt
 else
-    ln -s ../etc/letsencrypt/live/"${URL}" /config/keys/letsencrypt
+    ln -s /config/etc/letsencrypt/live/"${URL}" /config/keys/letsencrypt
 fi
 
 # cleanup unused csr and keys folders
-rm -rf /etc/letsencrypt/csr
-rm -rf /etc/letsencrypt/keys
+rm -rf /config/etc/letsencrypt/csr
+rm -rf /config/etc/letsencrypt/keys
 
 # checking for changes in cert variables, revoking certs if necessary
 if [[ ! "${URL}" = "${ORIGURL}" ]] ||
@@ -191,26 +190,17 @@ if [[ ! "${URL}" = "${ORIGURL}" ]] ||
     [[ ! "${STAGING}" = "${ORIGSTAGING}" ]] ||
     [[ ! "${CERTPROVIDER}" = "${ORIGCERTPROVIDER}" ]]; then
     echo "Different validation parameters entered than what was used before. Revoking and deleting existing certificate, and an updated one will be created"
-    if [[ "${ORIGCERTPROVIDER}" = "zerossl" ]] && [[ -n "${ORIGEMAIL}" ]]; then
+    if [[ "${ORIGCERTPROVIDER}" = "zerossl" ]]; then
         REV_ACMESERVER=("https://acme.zerossl.com/v2/DV90")
-        REV_ZEROSSL_EAB_KID=$(awk -F "=" '/eab-kid/ {print $2}' "/config/etc/letsencrypt/renewal/${ORIGDOMAIN}.conf" | tr -d ' ')
-        REV_ZEROSSL_EAB_HMAC_KEY=$(awk -F "=" '/eab-hmac-key/ {print $2}' "/config/etc/letsencrypt/renewal/${ORIGDOMAIN}.conf" | tr -d ' ')
-        if [[ -z "${REV_ZEROSSL_EAB_KID}" ]] || [[ -z "${REV_ZEROSSL_EAB_HMAC_KEY}" ]]; then
-            REV_ZEROSSL_EAB_KID=$(awk -F "=" '/eab-kid/ {print $2}' /config/etc/letsencrypt/cli.ini | tr -d ' ')
-            REV_ZEROSSL_EAB_HMAC_KEY=$(awk -F "=" '/eab-hmac-key/ {print $2}' /config/etc/letsencrypt/cli.ini | tr -d ' ')
-        fi
-        if [[ -n "${REV_ZEROSSL_EAB_KID}" ]] && [[ -n "${REV_ZEROSSL_EAB_HMAC_KEY}" ]]; then
-            REV_ACMESERVER+=("--eab-kid" "${REV_ZEROSSL_EAB_KID}" "--eab-hmac-key" "${REV_ZEROSSL_EAB_HMAC_KEY}")
-        fi
     elif [[ "${ORIGSTAGING}" = "true" ]]; then
         REV_ACMESERVER=("https://acme-staging-v02.api.letsencrypt.org/directory")
     else
         REV_ACMESERVER=("https://acme-v02.api.letsencrypt.org/directory")
     fi
     if [[ -f /config/etc/letsencrypt/live/"${ORIGDOMAIN}"/fullchain.pem ]]; then
-        certbot revoke --non-interactive --cert-path /config/etc/letsencrypt/live/"${ORIGDOMAIN}"/fullchain.pem --server "${REV_ACMESERVER[@]}" || true
+        certbot revoke --config-dir /config/etc/letsencrypt --logs-dir /config/log/letsencrypt --work-dir /tmp/letsencrypt --config /config/etc/letsencrypt/cli.ini --non-interactive --cert-path /config/etc/letsencrypt/live/"${ORIGDOMAIN}"/fullchain.pem --key-path /config/etc/letsencrypt/live/"${ORIGDOMAIN}"/privkey.pem --server "${REV_ACMESERVER[@]}" || true
     else
-        certbot revoke --non-interactive --cert-name "${ORIGDOMAIN}" --server "${REV_ACMESERVER[@]}" || true
+        certbot revoke --config-dir /config/etc/letsencrypt --logs-dir /config/log/letsencrypt --work-dir /tmp/letsencrypt --config /config/etc/letsencrypt/cli.ini --non-interactive --cert-name "${ORIGDOMAIN}" --server "${REV_ACMESERVER[@]}" || true
     fi
     rm -rf /config/etc/letsencrypt/{accounts,archive,live,renewal}
 fi
@@ -223,9 +213,9 @@ if [[ -f "/config/keys/letsencrypt/chain.pem" ]] && { [[ "${CERTPROVIDER}" == "l
     echo "The cert seems to be using the old LE root cert, which is no longer valid. Deleting and revoking."
     REV_ACMESERVER=("https://acme-v02.api.letsencrypt.org/directory")
     if [[ -f /config/etc/letsencrypt/live/"${ORIGDOMAIN}"/fullchain.pem ]]; then
-        certbot revoke --non-interactive --cert-path /config/etc/letsencrypt/live/"${ORIGDOMAIN}"/fullchain.pem --server "${REV_ACMESERVER[@]}" || true
+        certbot revoke --config-dir /config/etc/letsencrypt --logs-dir /config/log/letsencrypt --work-dir /tmp/letsencrypt --config /config/etc/letsencrypt/cli.ini --non-interactive --cert-path /config/etc/letsencrypt/live/"${ORIGDOMAIN}"/fullchain.pem --server "${REV_ACMESERVER[@]}" || true
     else
-        certbot revoke --non-interactive --cert-name "${ORIGDOMAIN}" --server "${REV_ACMESERVER[@]}" || true
+        certbot revoke --config-dir /config/etc/letsencrypt --logs-dir /config/log/letsencrypt --work-dir /tmp/letsencrypt --config /config/etc/letsencrypt/cli.ini --non-interactive --cert-name "${ORIGDOMAIN}" --server "${REV_ACMESERVER[@]}" || true
     fi
     rm -rf /config/etc/letsencrypt/{accounts,archive,live,renewal}
 fi
@@ -370,7 +360,7 @@ if [[ ! -f "/config/keys/letsencrypt/fullchain.pem" ]]; then
         set_ini_value "eab-hmac-key" "${ZEROSSL_EAB_HMAC_KEY}" /config/etc/letsencrypt/cli.ini
     fi
     echo "Generating new certificate"
-    certbot certonly --non-interactive --renew-by-default
+    certbot certonly --config-dir /config/etc/letsencrypt --logs-dir /config/log/letsencrypt --work-dir /tmp/letsencrypt --config /config/etc/letsencrypt/cli.ini --non-interactive --renew-by-default
     if [[ ! -d /config/keys/letsencrypt ]]; then
         if [[ "${VALIDATION}" = "dns" ]]; then
             echo "ERROR: Cert does not exist! Please see the validation error above. Make sure you entered correct credentials into the ${DNSCREDENTIALFILE} file."
